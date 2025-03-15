@@ -8,7 +8,6 @@ terraform {
       source  = "hashicorp/null"
       version = "3.2.3"
     }
-
   }
 }
 
@@ -16,99 +15,85 @@ provider "aws" {
   region = "us-east-1"
 }
 
-provider "null" {
+provider "null" {}
 
+# IAM role and instance profile for instances
+resource "aws_iam_role" "ec2_role" {
+  name = "ec2_role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
 }
 
-resource "aws_instance" "Terra_deployed_1" {
+# Attach the AmazonEC2ReadOnlyAccess policy to the role
+resource "aws_iam_role_policy_attachment" "ec2_role_policy" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess"
+}
+
+# Create an instance profile for the role
+resource "aws_iam_instance_profile" "ec2_instance_profile" {
+  name = "ec2_instance_profile"
+  role = aws_iam_role.ec2_role.name
+}
+
+# Create a primary EC2 instance
+resource "aws_instance" "primary_instance" {
   ami                    = "ami-08b5b3a93ed654d19"
   instance_type          = "t2.micro"
   key_name               = "EC2-keys"
   vpc_security_group_ids = ["sg-0d395624af0613ac3"]
   subnet_id              = "subnet-0bca6832a84e65099"
   availability_zone      = "us-east-1a"
-
-  user_data = <<-EOF
-    #!/bin/bash
-    sudo yum install -y amazon-efs-utils
-    mkdir -p /mnt/efs
-    mount -t efs ${aws_efs_file_system.first-efs.id}:/ /mnt/efs
-    echo "${aws_efs_file_system.first-efs.id}:/ /mnt/efs efs defaults,_netdev 0 0" >> /etc/fstab
-  EOF
+  iam_instance_profile   = aws_iam_instance_profile.ec2_instance_profile.name
 
   tags = {
     Name = var.EC2_TAG
   }
-
 }
 
-
-resource "null_resource" "MY-AMI" {
-  provisioner "local-exec" {
-    command = "aws ec2 create-image --instance-id i-09d9e1ec8968b8382 --name 'my_ami_image' --no-reboot"
-
-  }
-}
-
-resource "aws_ebs_volume" "my-ec2-volume" {
+# Create an EFS file system
+resource "aws_ebs_volume" "primary_volume" {
   availability_zone = "us-east-1a"
   type              = "gp3"
   size              = 20
   throughput        = 500
+  encrypted         = true
 }
 
-resource "aws_volume_attachment" "ec2-2nd-volume" {
+# Attach the volume to the instance
+resource "aws_volume_attachment" "primary_volume_attachment" {
   device_name = "/dev/xvdf"
-  volume_id   = aws_ebs_volume.my-ec2-volume.id
-  instance_id = aws_instance.Terra_deployed_1.id
+  volume_id   = aws_ebs_volume.primary_volume.id
+  instance_id = aws_instance.primary_instance.id
 }
 
-### EFS FILE SYSTEM ###
-resource "aws_efs_file_system" "first-efs" {
-  performance_mode = "generalPurpose"
-  encrypted        = false
-
-}
-// EFS SUBNET MOUNT
-
-resource "aws_efs_mount_target" "name" {
-  file_system_id  = aws_efs_file_system.first-efs.id
-  subnet_id       = "subnet-0bca6832a84e65099"
-  security_groups = ["sg-0d395624af0613ac3"]
-
-}
-
-
-/*
-### Mounting EFS to already created INSTANCE ###
-
-resource "null_resource" "mount_efs" {
-  connection {
-    type        = "ssh"
-    user        = "ec2-user"
-    private_key = file("EC2-keys.pem")
-    host        = aws_instance.Terra_deployed_1.public_ip
-  }
-
-
-  provisioner "remote-exec" {
-    inline = [
-      "sudo yum install -y amazon-efs-utils",
-      "sudo mkdir -p /mnt/efs",
-      "sudo mount -t efs ${aws_efs_file_system.first-efs.id}:/ /mnt/efs",
-      "echo '${aws_efs_file_system.first-efs.id}:/ /mnt/efs efs defaults,_netdev 0 0' | sudo tee -a /etc/fstab"
-    ]
+# Create a secondary instance using the AMI created from the primary instance
+resource "null_resource" "create_ami" {
+  provisioner "local-exec" {
+    command = "aws ec2 create-image --instance-id ${aws_instance.primary_instance.id} --name 'primary_instance_ami' --no-reboot"
   }
 }
-*/
 
-
-resource "aws_instance" "my-instance-2" {
+resource "aws_instance" "secondary_instance" {
   ami                    = var.my_ami
-  instance_type          = aws_instance.Terra_deployed_1.instance_type
-  subnet_id              = aws_instance.Terra_deployed_1.subnet_id
-  vpc_security_group_ids = aws_instance.Terra_deployed_1.vpc_security_group_ids
-  key_name               = aws_instance.Terra_deployed_1.key_name
+  instance_type          = aws_instance.primary_instance.instance_type
+  subnet_id              = aws_instance.primary_instance.subnet_id
+  vpc_security_group_ids = aws_instance.primary_instance.vpc_security_group_ids
+  key_name               = aws_instance.primary_instance.key_name
+  iam_instance_profile   = aws_iam_instance_profile.ec2_instance_profile.name
 
+  tags = {
+    Name = "Secondary-instance"
+  }
 }
-
