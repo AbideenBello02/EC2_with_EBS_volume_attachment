@@ -1,7 +1,7 @@
 variable "EC2_TAG" {
-  description = "my tag name"
+  description = "instance tag name"
   type        = string
-  default     = "My-ec2-kazuki"
+  default     = "Primary-instance(EC2_EBS_lab)"
 }
 
 variable "instance_id" {
@@ -10,16 +10,11 @@ variable "instance_id" {
 }
 
 variable "my_ami" {
+  description = "AMI ID for the secondary instance"
   default = "ami-0250b891f2d1b2d84"
 
 }
 
-variable "VpcCIDR" {
-  description = "Please enter the IP range (CIDR notation) for this VPC"
-  type        = string
-  default     = "10.0.0.0/16"
-
-}
 
 
 
